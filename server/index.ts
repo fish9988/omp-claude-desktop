@@ -174,6 +174,82 @@ const schedulesStore = new Map<string, ScheduledTaskRecord>([
     },
   ],
 ]);
+interface McpServerRecord {
+  name: string;
+  transport: 'stdio' | 'sse' | 'http';
+  command: string;
+  status: 'connected' | 'disabled' | 'error';
+  enabled: boolean;
+  toolsCount: number;
+  toolNames: string[];
+  latencyMs: number;
+  lastCheckedAt: number;
+  builtin?: boolean;
+}
+
+const mcpServersStore = new Map<string, McpServerRecord>([
+  [
+    'omp-local-filesystem',
+    {
+      name: 'omp-local-filesystem',
+      transport: 'stdio',
+      command: 'bun run mcp:filesystem --root .',
+      status: 'connected',
+      enabled: true,
+      toolsCount: 6,
+      toolNames: ['read_file', 'write_file', 'edit_file', 'list_directory', 'search_files', 'get_file_info'],
+      latencyMs: 3,
+      lastCheckedAt: Date.now(),
+      builtin: true,
+    },
+  ],
+  [
+    'omp-git-worktree',
+    {
+      name: 'omp-git-worktree',
+      transport: 'stdio',
+      command: 'bun run mcp:git-worktree',
+      status: 'connected',
+      enabled: true,
+      toolsCount: 5,
+      toolNames: ['git_status', 'git_diff', 'git_stage', 'git_unstage', 'git_commit'],
+      latencyMs: 5,
+      lastCheckedAt: Date.now(),
+      builtin: true,
+    },
+  ],
+  [
+    'omp-web-research',
+    {
+      name: 'omp-web-research',
+      transport: 'http',
+      command: 'http://127.0.0.1:5189/mcp/web',
+      status: 'connected',
+      enabled: true,
+      toolsCount: 3,
+      toolNames: ['web_search', 'web_fetch', 'extract_markdown'],
+      latencyMs: 12,
+      lastCheckedAt: Date.now(),
+      builtin: true,
+    },
+  ],
+  [
+    'omp-sqlite-memory',
+    {
+      name: 'omp-sqlite-memory',
+      transport: 'stdio',
+      command: 'bun:sqlite ~/.omp/agent/memory.db',
+      status: 'connected',
+      enabled: true,
+      toolsCount: 3,
+      toolNames: ['memory_search', 'memory_save', 'memory_forget'],
+      latencyMs: 2,
+      lastCheckedAt: Date.now(),
+      builtin: true,
+    },
+  ],
+]);
+
 const wsClients = new Set<ServerWebSocket<unknown>>();
 
 function broadcastWs(payload: unknown) {
@@ -1314,6 +1390,7 @@ serve({
         if (action === 'stage' && file) args = ['add', '--', file];
         else if (action === 'stage-all') args = ['add', '-A'];
         else if (action === 'unstage' && file) args = ['restore', '--staged', '--', file];
+        else if (action === 'discard' && file) args = ['checkout', '--', file];
         else if (action === 'commit' && message) args = ['commit', '-m', message];
         else return jsonResponse({ error: '无效的 Git 操作' }, 400);
 
@@ -1498,10 +1575,28 @@ serve({
           rawConfigYml = await readFile(join(OMP_AGENT_DIR, 'config.yml'), 'utf8');
         }
       } catch {}
+
+      const providerGroups = new Map<string, { name: string; api: string; baseUrl: string; modelCount: number }>();
+      for (const m of modelsCatalog) {
+        const cur = providerGroups.get(m.provider);
+        if (cur) {
+          cur.modelCount += 1;
+        } else {
+          const pCfg = providerEndpoints.get(m.provider);
+          providerGroups.set(m.provider, {
+            name: m.provider,
+            api: pCfg?.api || (m.provider === 'anthropic' ? 'anthropic-messages' : 'openai-completions'),
+            baseUrl: pCfg?.baseUrl || (m.provider === 'anthropic' ? 'https://api.anthropic.com' : '~/.omp/agent/models.yml'),
+            modelCount: 1,
+          });
+        }
+      }
+
       return jsonResponse({
         ompAgentDir: OMP_AGENT_DIR,
         modelsYml: rawModelsYml,
         configYml: rawConfigYml,
+        providers: Array.from(providerGroups.values()),
         slashCommands: [
           { command: '/btw', label: '旁路快问 (/btw)', desc: '在不污染当前对话上下文树的前提下快速提问' },
           { command: '/compact', label: '压缩上下文 (/compact)', desc: '总结并折叠早期历史轮次，释放约 65% 上下文窗口' },
@@ -1513,18 +1608,68 @@ serve({
           { command: '/export', label: '导出对话 Markdown (/export)', desc: '将当前会话完整导出为 Markdown 文档' },
         ],
         builtinTools: [
-          { name: 'read_file', desc: '按行读取工作区源码与配置文件', category: 'Filesystem' },
-          { name: 'edit_file', desc: '精确替换与增删代码块并生成 Diff', category: 'Filesystem' },
-          { name: 'write_file', desc: '创建或覆写 UTF-8 文本文件', category: 'Filesystem' },
-          { name: 'bash / pwsh', desc: '在工作区执行终端命令、测试与构建脚本', category: 'Execution' },
-          { name: 'grep / glob', desc: '高速正则搜索与文件路径模式匹配', category: 'Search' },
-          { name: 'subagent', desc: '派发独立上下文子代理并行执行子任务', category: 'Orchestration' },
+          { name: 'read_file', desc: '按行读取工作区源码与配置文件', category: 'Filesystem', tier: 'read' },
+          { name: 'grep / glob', desc: '高速正则搜索与文件路径模式匹配', category: 'Search', tier: 'read' },
+          { name: 'edit_file', desc: '精确替换与增删代码块并生成 Diff', category: 'Filesystem', tier: 'edit' },
+          { name: 'write_file', desc: '创建或覆写 UTF-8 文本文件', category: 'Filesystem', tier: 'edit' },
+          { name: 'bash / pwsh', desc: '在工作区执行终端命令、测试与构建脚本', category: 'Execution', tier: 'yolo' },
+          { name: 'subagent', desc: '派发独立上下文子代理并行执行子任务', category: 'Orchestration', tier: 'edit' },
         ],
-        mcpServers: [
-          { name: 'omp-local-filesystem', transport: 'stdio', status: 'connected', toolsCount: 6 },
-          { name: 'omp-git-worktree', transport: 'stdio', status: 'connected', toolsCount: 4 },
-        ],
+        mcpServers: Array.from(mcpServersStore.values()),
       });
+    }
+
+    // POST /api/capabilities/mcp (Add custom MCP server)
+    if (url.pathname === '/api/capabilities/mcp' && req.method === 'POST') {
+      const body = await req.json().catch(() => ({}));
+      const name = String(body.name || '').trim();
+      if (!name) return jsonResponse({ error: 'MCP 服务名称不能为空' }, 400);
+      const transport = body.transport === 'sse' || body.transport === 'http' ? body.transport : 'stdio';
+      const command = String(body.command || 'npx -y @modelcontextprotocol/server-everything').trim();
+      const toolNames = Array.isArray(body.toolNames) && body.toolNames.length > 0
+        ? body.toolNames.map((t: any) => String(t))
+        : ['mcp_invoke', 'mcp_list_resources', 'mcp_read_resource'];
+      const rec: McpServerRecord = {
+        name,
+        transport,
+        command,
+        status: 'connected',
+        enabled: true,
+        toolsCount: toolNames.length,
+        toolNames,
+        latencyMs: Math.floor(Math.random() * 8) + 3,
+        lastCheckedAt: Date.now(),
+        builtin: false,
+      };
+      mcpServersStore.set(name, rec);
+      return jsonResponse({ ok: true, server: rec, mcpServers: Array.from(mcpServersStore.values()) });
+    }
+
+    const mcpMatch = url.pathname.match(/^\/api\/capabilities\/mcp\/([^/]+)(?:\/(.+))?$/);
+    if (mcpMatch) {
+      const mcpName = decodeURIComponent(mcpMatch[1]);
+      const mcpAction = mcpMatch[2] || '';
+      const srv = mcpServersStore.get(mcpName);
+      if (!srv) return jsonResponse({ error: 'MCP server not found' }, 404);
+      if (mcpAction === '' && req.method === 'PATCH') {
+        const body = await req.json().catch(() => ({}));
+        if (typeof body.enabled === 'boolean') {
+          srv.enabled = body.enabled;
+          srv.status = body.enabled ? 'connected' : 'disabled';
+          srv.lastCheckedAt = Date.now();
+        }
+        return jsonResponse({ ok: true, server: srv, mcpServers: Array.from(mcpServersStore.values()) });
+      }
+      if (mcpAction === 'ping' && req.method === 'POST') {
+        srv.lastCheckedAt = Date.now();
+        srv.latencyMs = Math.floor(Math.random() * 7) + 2;
+        srv.status = srv.enabled ? 'connected' : 'disabled';
+        return jsonResponse({ ok: true, server: srv, mcpServers: Array.from(mcpServersStore.values()) });
+      }
+      if (mcpAction === '' && req.method === 'DELETE') {
+        mcpServersStore.delete(mcpName);
+        return jsonResponse({ ok: true, mcpServers: Array.from(mcpServersStore.values()) });
+      }
     }
 
     if (url.pathname === '/api/fonts' && req.method === 'GET') {
@@ -1573,6 +1718,59 @@ serve({
       };
       sessionStore.set(id, newSession);
       return jsonResponse({ session: newSession });
+    }
+
+    // GET /api/sessions/search?q=... (Full-text search across session titles, workspaces, and message bodies)
+    if (url.pathname === '/api/sessions/search' && req.method === 'GET') {
+      const q = (url.searchParams.get('q') || '').trim().toLowerCase();
+      if (!q) return jsonResponse({ results: [] });
+      const results: Array<{
+        sessionId: string;
+        title: string;
+        workspaceName: string;
+        cwd: string;
+        updatedAt: number;
+        matchType: 'title' | 'message';
+        snippet: string;
+      }> = [];
+      for (const s of sessionStore.values()) {
+        if (s.archived) continue;
+        if (s.title.toLowerCase().includes(q) || s.workspaceName.toLowerCase().includes(q)) {
+          results.push({
+            sessionId: s.id,
+            title: s.title,
+            workspaceName: s.workspaceName,
+            cwd: s.cwd,
+            updatedAt: s.updatedAt,
+            matchType: 'title',
+            snippet: `${s.workspaceName} · ${s.turns.length} 轮对话`,
+          });
+          continue;
+        }
+        for (let i = s.turns.length - 1; i >= 0; i--) {
+          const t = s.turns[i];
+          const uText = String(t.userMessage?.text || '');
+          const aText = String(t.assistantMessage?.text || '');
+          const combined = `${uText}\n${aText}`;
+          const idx = combined.toLowerCase().indexOf(q);
+          if (idx >= 0) {
+            const start = Math.max(0, idx - 24);
+            const snippet = combined.slice(start, idx + q.length + 48).replace(/\s+/g, ' ').trim();
+            results.push({
+              sessionId: s.id,
+              title: s.title,
+              workspaceName: s.workspaceName,
+              cwd: s.cwd,
+              updatedAt: s.updatedAt,
+              matchType: 'message',
+              snippet: (start > 0 ? '…' : '') + snippet + '…',
+            });
+            break;
+          }
+        }
+        if (results.length >= 20) break;
+      }
+      return jsonResponse({ results });
     }
 
     // Match /api/sessions/:id/...
@@ -1773,10 +1971,80 @@ serve({
         });
       }
 
+      if (action === 'queue' && req.method === 'GET') {
+        return jsonResponse({
+          ok: true,
+          queue: sessionQueues.get(sessionId) || [],
+        });
+      }
+
+      if (action === 'queue' && req.method === 'DELETE') {
+        const idxStr = url.searchParams.get('index');
+        const currentQ = sessionQueues.get(sessionId) || [];
+        if (idxStr !== null) {
+          const idx = Number(idxStr);
+          if (idx >= 0 && idx < currentQ.length) {
+            currentQ.splice(idx, 1);
+          }
+        } else {
+          currentQ.length = 0;
+        }
+        sessionQueues.set(sessionId, currentQ);
+        broadcastWs({ type: 'queue_updated', sessionId, queue: currentQ });
+        return jsonResponse({ ok: true, queue: currentQ });
+      }
+
       if (action === 'prompt' && req.method === 'POST') {
         const body = await req.json().catch(() => ({}));
         const promptText = String(body.text || '').trim();
+        const mode: 'send' | 'queue' | 'steer' = body.mode || 'send';
+        const permissionMode: 'read' | 'edit' | 'yolo' = body.permissionMode || 'edit';
         if (!promptText) return jsonResponse({ error: 'Empty prompt' }, 400);
+
+        const activeRun = activeRuns.get(sessionId);
+
+        // Real-time Steer into active running turn (DSH / OpenCode pattern)
+        if (activeRun && mode === 'steer') {
+          const currentTurn = record.turns[record.turns.length - 1];
+          if (currentTurn && currentTurn.streaming) {
+            const steerStep = {
+              id: `step-steer-${Date.now()}`,
+              kind: 'tool',
+              title: '实时纠偏 (Steer)',
+              verb: '纠偏',
+              target: promptText.slice(0, 48),
+              toolName: 'agent_steer',
+              args: JSON.stringify({ steerInstruction: promptText }, null, 2),
+              output: `已注入实时纠偏指令：「${promptText}」，后续生成步骤已动态对齐。`,
+              isError: false,
+              durationMs: 18,
+              running: false,
+            };
+            currentTurn.processSteps.push(steerStep);
+            (activeRun as any).steers = [...((activeRun as any).steers || []), promptText];
+            broadcastWs({
+              type: 'turn_stream',
+              sessionId,
+              turnId: currentTurn.id,
+              processSteps: currentTurn.processSteps,
+              waitingWord: '应用实时纠偏',
+            });
+            return jsonResponse({ ok: true, steered: true, turnId: currentTurn.id });
+          }
+        }
+
+        // Queue message if requested or if session is currently busy
+        if (mode === 'queue' || (activeRun && mode !== 'steer')) {
+          const currentQ = sessionQueues.get(sessionId) || [];
+          currentQ.push({
+            text: promptText,
+            model: body.model || record.model,
+            thinkingLevel: body.thinkingLevel || record.thinkingLevel,
+          });
+          sessionQueues.set(sessionId, currentQ);
+          broadcastWs({ type: 'queue_updated', sessionId, queue: currentQ });
+          return jsonResponse({ ok: true, queued: true, queue: currentQ });
+        }
 
         if (record.turns.length === 0 && (record.title === '新对话' || !record.title)) {
           record.title = promptText.slice(0, 48);
@@ -1802,9 +2070,18 @@ serve({
         record.updatedAt = now;
 
         const abortController = new AbortController();
-        activeRuns.set(sessionId, { abortController, phase: 'thinking' });
+        const runState: { abortController: AbortController; phase: string; turnId?: string; steers?: string[] } = {
+          abortController,
+          phase: 'thinking',
+          turnId,
+          steers: [],
+        };
+        activeRuns.set(sessionId, runState);
 
-        // Run asynchronous multi-session streaming pipeline
+        // Extract @file mentions for the Waterfall Tool Pipeline
+        const mentionedFiles = Array.from(promptText.matchAll(/@([^\s,;]+)/g)).map((m) => m[1]);
+
+        // Run asynchronous multi-session streaming pipeline with Waterfall Tool Execution
         (async () => {
           try {
             broadcastWs({
@@ -1829,17 +2106,19 @@ serve({
             newTurn.processSteps.push(thinkStep);
 
             const thinkingChunks = [
+              `[SystemPromptService] 组装动态提示词：Identity(-100) + Workspace(${record.workspaceName}) + Policy(mode=${permissionMode})...\n`,
               `正在解析用户指令：「${promptText}」...\n`,
-              `检查当前工作区上下文 (\`${record.cwd}\`) 与模型配置 (\`${record.model}\`, effort=\`${record.thinkingLevel}\`)。\n`,
-              `组织结构化响应与可执行步骤。`,
+              mentionedFiles.length > 0
+                ? `检测到显式文件引用 (${mentionedFiles.map((f) => `@${f}`).join(', ')})，准备进入三阶段工具流水线 (Pre-Check → Execute → Post-Sync)。\n`
+                : `检查当前工作区上下文 (\`${record.cwd}\`) 与模型配置 (\`${record.model}\`, effort=\`${record.thinkingLevel}\`)。\n`,
             ];
 
             for (const chunk of thinkingChunks) {
               if (abortController.signal.aborted) return;
-              await Bun.sleep(160);
+              await Bun.sleep(150);
               thinkStep.detail += chunk;
-              thinkStep.durationMs += 160;
-              newTurn.processDurationMs += 160;
+              thinkStep.durationMs += 150;
+              newTurn.processDurationMs += 150;
               broadcastWs({
                 type: 'turn_stream',
                 sessionId,
@@ -1850,22 +2129,77 @@ serve({
             }
             thinkStep.running = false;
 
-            // Tool step simulation / inspection
-            activeRuns.set(sessionId, { abortController, phase: 'working' });
+            // Waterfall Tool Pipeline: Pre-execute -> Execute -> Post-execute
+            runState.phase = 'working';
             broadcastWs({ type: 'session_status', sessionId, running: true, phase: 'working' });
 
+            const readSnippets: Array<{ relPath: string; lines: number; preview: string }> = [];
+            for (const relFile of mentionedFiles.slice(0, 4)) {
+              if (abortController.signal.aborted) return;
+              const fullTarget = join(record.cwd, relFile);
+              const tStart = Date.now();
+              const fileStep: any = {
+                id: `step-read-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                kind: 'tool',
+                title: `读取文件`,
+                verb: '读取',
+                target: relFile,
+                toolName: 'read_file',
+                args: JSON.stringify({ file_path: relFile, permission_mode: permissionMode }, null, 2),
+                output: '',
+                isError: false,
+                durationMs: 0,
+                running: true,
+              };
+              newTurn.processSteps.push(fileStep);
+              broadcastWs({
+                type: 'turn_stream',
+                sessionId,
+                turnId,
+                processSteps: newTurn.processSteps,
+                waitingWord: `读取 ${relFile}`,
+              });
+              await Bun.sleep(140);
+              if (existsSync(fullTarget)) {
+                try {
+                  const content = await readFile(fullTarget, 'utf8');
+                  const lineCount = content.split(/\r?\n/).length;
+                  const snippet = content.slice(0, 600);
+                  fileStep.output = `// ${relFile} (${lineCount} lines)\n${snippet}${content.length > 600 ? '\n...' : ''}`;
+                  readSnippets.push({ relPath: relFile, lines: lineCount, preview: snippet.slice(0, 240) });
+                } catch (err: any) {
+                  fileStep.isError = true;
+                  fileStep.output = `读取失败: ${String(err?.message || err)}`;
+                }
+              } else {
+                fileStep.isError = true;
+                fileStep.output = `文件不存在: ${relFile}`;
+              }
+              fileStep.durationMs = Date.now() - tStart;
+              fileStep.running = false;
+              newTurn.processDurationMs += fileStep.durationMs;
+              broadcastWs({
+                type: 'turn_stream',
+                sessionId,
+                turnId,
+                processSteps: newTurn.processSteps,
+                waitingWord: `完成读取 ${relFile}`,
+              });
+            }
+
             const toolStepId = `step-tool-${Date.now()}`;
+            const relCwdName = basename(record.cwd) || record.cwd;
             const toolStep = {
               id: toolStepId,
               kind: 'tool',
               title: '检索工作区上下文',
-              verb: '读取',
-              target: record.cwd,
+              verb: '检索',
+              target: relCwdName,
               toolName: 'workspace_inspect',
-              args: JSON.stringify({ cwd: record.cwd, query: promptText.slice(0, 40) }, null, 2),
-              output: `Workspace: ${record.cwd}\nActive Model: ${record.model}\nSession Turns: ${record.turns.length}`,
+              args: JSON.stringify({ cwd: record.cwd, permissionMode, query: promptText.slice(0, 40) }, null, 2),
+              output: `Workspace: ${record.cwd}\nPermission Guard: ${permissionMode.toUpperCase()}\nActive Model: ${record.model}\nSession Turns: ${record.turns.length}`,
               isError: false,
-              durationMs: 210,
+              durationMs: 180,
               running: true,
             };
             newTurn.processSteps.push(toolStep);
@@ -1874,22 +2208,27 @@ serve({
               sessionId,
               turnId,
               processSteps: newTurn.processSteps,
-              waitingWord: '读取工作区',
+              waitingWord: '检索工作区',
             });
-            await Bun.sleep(210);
+            await Bun.sleep(180);
             toolStep.running = false;
-            newTurn.processDurationMs += 210;
+            newTurn.processDurationMs += 180;
+            broadcastWs({ type: 'workbench_refresh', sessionId, cwd: record.cwd });
 
-            // Stream markdown answer
-            const responseParagraphs = [
+            // Stream markdown answer (incorporating any read @files and live steers)
+            const responseParagraphs: string[] = [
               `已收到你的请求：**${promptText}**。\n\n`,
-              `当前正运行在 **OMP Desktop (Claude Style)** 多会话并发引擎中：\n`,
-              `- **工作区路径**：\`${record.cwd}\`\n`,
+              readSnippets.length > 0
+                ? `### 已解析引用文件 (${readSnippets.length})\n` +
+                  readSnippets.map((s) => `- \`${s.relPath}\`（共 **${s.lines}** 行）已通过三阶段工具流水线载入上下文。\n`).join('') +
+                  `\n`
+                : '',
+              `当前运行在 **OMP Desktop (Claude Style)** 引擎中：\n`,
+              `- **工作区与权限策略**：\`${relCwdName}\` · 权限模式 \`${permissionMode.toUpperCase()}\`\n`,
               `- **当前模型**：\`${record.model}\`（思考档位：\`${record.thinkingLevel}\`）\n`,
-              `- **过程折叠列**：上方耗时与工具步骤已自动收纳，折叠时不挂载重型 DOM 节点以保证 60fps 流畅滚动。\n\n`,
-              `\`\`\`ts\n// OMP Multi-Session Pool 状态快照\nexport const sessionSnapshot = {\n  id: "${record.id}",\n  model: "${record.model}",\n  effort: "${record.thinkingLevel}",\n  zeroLatencySwitch: true,\n};\n\`\`\`\n\n`,
-              `> 你可以随时点击左侧边栏切换到其他会话，当前流式任务将在后台无阻塞继续运行。`,
-            ];
+              `- **步骤级自动收纳**：回合完成后上方工具轨迹会自动折叠，仅展示相对路径以降低视觉噪音。\n\n`,
+              `\`\`\`ts\n// OMP Waterfall Tool Pipeline & Session State\nexport const turnExecution = {\n  sessionId: "${record.id}",\n  model: "${record.model}",\n  permissionMode: "${permissionMode}",\n  referencedFiles: ${JSON.stringify(mentionedFiles)},\n};\n\`\`\`\n`,
+            ].filter(Boolean);
 
             let accumulatedText = '';
             newTurn.assistantMessage = {
@@ -1899,7 +2238,7 @@ serve({
               provider: record.provider,
               timestamp: Date.now(),
               durationMs: 0,
-              ttftMs: 280,
+              ttftMs: 240,
               usage: { input: 2450, output: 0, cacheRead: 14200, cacheWrite: 0, totalTokens: 16650 },
               costMicroCny: 18000,
               costMicroUsd: 2500,
@@ -1907,10 +2246,14 @@ serve({
 
             for (const part of responseParagraphs) {
               if (abortController.signal.aborted) return;
-              await Bun.sleep(130);
+              await Bun.sleep(120);
               accumulatedText += part;
+              if (runState.steers && runState.steers.length > 0) {
+                const drainedSteers = runState.steers.splice(0, runState.steers.length);
+                accumulatedText += `\n> **⚡ 已响应实时纠偏 (Steer)**：${drainedSteers.join('；')}\n\n`;
+              }
               newTurn.assistantMessage.text = accumulatedText;
-              newTurn.assistantMessage.durationMs += 130;
+              newTurn.assistantMessage.durationMs += 120;
               newTurn.assistantMessage.usage.output += 48;
               newTurn.assistantMessage.usage.totalTokens += 48;
               broadcastWs({
@@ -1925,10 +2268,10 @@ serve({
 
             newTurn.streaming = false;
             record.sessionStats.turns = record.turns.length;
-            record.sessionStats.steps += 2;
+            record.sessionStats.steps += newTurn.processSteps.length;
             record.sessionStats.llmMs += newTurn.assistantMessage.durationMs;
-            record.sessionStats.toolMs += 210;
-            record.sessionStats.ttftMs += 280;
+            record.sessionStats.toolMs += newTurn.processDurationMs;
+            record.sessionStats.ttftMs += 240;
             record.sessionStats.ttftSteps += 1;
             record.sessionStats.decodeTokens += newTurn.assistantMessage.usage.output;
             record.sessionStats.decodeMs += newTurn.assistantMessage.durationMs;
@@ -1953,6 +2296,25 @@ serve({
               running: false,
               phase: 'notification',
             });
+
+            // Auto-drain next message in sessionQueue if present
+            const remainingQ = sessionQueues.get(sessionId) || [];
+            if (remainingQ.length > 0) {
+              const nextItem = remainingQ.shift()!;
+              sessionQueues.set(sessionId, remainingQ);
+              broadcastWs({ type: 'queue_updated', sessionId, queue: remainingQ });
+              fetch(`http://127.0.0.1:${PORT}/api/sessions/${encodeURIComponent(sessionId)}/prompt`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  text: nextItem.text,
+                  model: nextItem.model,
+                  thinkingLevel: nextItem.thinkingLevel,
+                  mode: 'send',
+                  permissionMode,
+                }),
+              }).catch(() => {});
+            }
           } catch (e) {
             activeRuns.delete(sessionId);
             broadcastWs({ type: 'session_status', sessionId, running: false, phase: 'idle' });

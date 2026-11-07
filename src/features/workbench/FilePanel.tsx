@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { marked } from 'marked';
 
 interface FileEntry {
   name: string;
@@ -14,6 +15,10 @@ function formatFileSize(bytes: number): string {
   return `${bytes} B`;
 }
 
+function isRenderablePreviewFile(relPath: string): boolean {
+  return /\.(md|markdown|html|svg)$/i.test(relPath);
+}
+
 export const FilePanel = ({
   cwd,
   onInsertReference,
@@ -26,6 +31,8 @@ export const FilePanel = ({
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [previewFile, setPreviewFile] = useState<{ relPath: string; content: string } | null>(null);
+  const [previewMode, setPreviewMode] = useState<'code' | 'rendered'>('code');
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     setSubpath('');
@@ -68,6 +75,7 @@ export const FilePanel = ({
       );
       const data = await res.json();
       setPreviewFile({ relPath: entry.relPath, content: data.content || '' });
+      setPreviewMode(/\.(md|markdown)$/i.test(entry.relPath) ? 'rendered' : 'code');
     } catch {}
   };
 
@@ -80,6 +88,19 @@ export const FilePanel = ({
   };
 
   const cwdShort = cwd.split(/[/\\]/).filter(Boolean).pop() || cwd;
+
+  const renderedPreviewHtml = useMemo(() => {
+    if (!previewFile || previewMode !== 'rendered') return '';
+    if (/\.(md|markdown)$/i.test(previewFile.relPath)) {
+      return marked.parse(previewFile.content, { async: false, gfm: true, breaks: true }) as string;
+    }
+    return previewFile.content;
+  }, [previewFile, previewMode]);
+
+  const codeLines = useMemo(() => {
+    if (!previewFile) return [];
+    return previewFile.content.split(/\r?\n/);
+  }, [previewFile]);
 
   return (
     <div className="omp-wb-section">
@@ -126,16 +147,55 @@ export const FilePanel = ({
       {previewFile ? (
         <div className="omp-wb-preview-card">
           <div className="omp-wb-preview-head">
-            <span className="omp-wb-preview-title">{previewFile.relPath}</span>
-            <button
-              type="button"
-              className="omp-wb-pill-btn is-accent"
-              onClick={() => onInsertReference?.(`@${previewFile.relPath} `)}
-            >
-              + 引用到输入栏
-            </button>
+            <span className="omp-wb-preview-title" title={previewFile.relPath}>
+              {previewFile.relPath}
+            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              {isRenderablePreviewFile(previewFile.relPath) && (
+                <button
+                  type="button"
+                  className="omp-wb-pill-btn"
+                  onClick={() => setPreviewMode((m) => (m === 'code' ? 'rendered' : 'code'))}
+                >
+                  {previewMode === 'rendered' ? '源码' : '预览'}
+                </button>
+              )}
+              <button
+                type="button"
+                className="omp-wb-pill-btn"
+                onClick={() => {
+                  navigator.clipboard.writeText(previewFile.content).catch(() => {});
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 1200);
+                }}
+              >
+                {copied ? '已复制' : '复制'}
+              </button>
+              <button
+                type="button"
+                className="omp-wb-pill-btn is-accent"
+                onClick={() => onInsertReference?.(`@${previewFile.relPath} `)}
+              >
+                + 引用
+              </button>
+            </div>
           </div>
-          <pre className="omp-wb-code-preview">{previewFile.content}</pre>
+
+          {previewMode === 'rendered' && isRenderablePreviewFile(previewFile.relPath) ? (
+            <div
+              className="omp-wb-rendered-preview ds-markdown"
+              dangerouslySetInnerHTML={{ __html: renderedPreviewHtml }}
+            />
+          ) : (
+            <div className="omp-wb-code-preview omp-wb-code-numbered">
+              {codeLines.map((line, i) => (
+                <div key={i} className="omp-wb-code-line">
+                  <span className="omp-wb-code-lineno">{i + 1}</span>
+                  <span className="omp-wb-code-linetext">{line || ' '}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       ) : loading ? (
         <div className="omp-wb-empty">正在读取目录结构…</div>

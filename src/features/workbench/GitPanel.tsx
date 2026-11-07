@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
 interface GitFile {
   file: string;
@@ -46,7 +46,7 @@ export const GitPanel = ({ cwd }: { cwd: string }) => {
   }, [cwd]);
 
   const handleAction = async (
-    action: 'stage' | 'unstage' | 'stage-all' | 'commit',
+    action: 'stage' | 'unstage' | 'stage-all' | 'discard' | 'commit',
     file?: string
   ) => {
     try {
@@ -61,9 +61,22 @@ export const GitPanel = ({ cwd }: { cwd: string }) => {
         }),
       });
       if (action === 'commit') setCommitMessage('');
-      await fetchGit(selectedFile);
+      if (action === 'discard' && selectedFile === file) setSelectedFile('');
+      await fetchGit(action === 'discard' ? '' : selectedFile);
     } catch {}
   };
+
+  const parsedDiffLines = useMemo(() => {
+    if (!gitStatus.diff) return [];
+    const rawLines = gitStatus.diff.split(/\r?\n/);
+    return rawLines.filter((line, idx) => {
+      if (line.startsWith('diff --git ')) {
+        if (!selectedFile) return true;
+        return line.includes(selectedFile);
+      }
+      return idx < 600;
+    });
+  }, [gitStatus.diff, selectedFile]);
 
   if (!gitStatus.isGit && !loading) {
     return <div className="omp-wb-empty">当前目录尚未初始化 Git 仓库。</div>;
@@ -132,12 +145,11 @@ export const GitPanel = ({ cwd }: { cwd: string }) => {
               key={f.file}
               className={`omp-wb-row${selectedFile === f.file ? ' is-selected' : ''}`}
               onClick={() => {
-                setSelectedFile(f.file);
-                fetchGit(f.file);
+                setSelectedFile(selectedFile === f.file ? '' : f.file);
               }}
             >
               <span className={`omp-git-status is-${f.status}`}>{f.status}</span>
-              <span className="omp-wb-row-name">{f.file}</span>
+              <span className="omp-wb-row-name" title={f.file}>{f.file}</span>
               {(f.added > 0 || f.deleted > 0) && (
                 <span className="omp-wb-row-meta">
                   <span style={{ color: '#2b8a3e' }}>+{f.added}</span>{' '}
@@ -154,17 +166,56 @@ export const GitPanel = ({ cwd }: { cwd: string }) => {
               >
                 {f.staged ? '取消暂存' : '暂存'}
               </button>
+              {!f.staged && f.status !== 'U' && (
+                <button
+                  type="button"
+                  className="omp-wb-hover-pill"
+                  style={{ color: '#c92a2a' }}
+                  title="放弃对该文件的未暂存修改 (Discard)"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleAction('discard', f.file);
+                  }}
+                >
+                  放弃
+                </button>
+              )}
             </div>
           ))}
         </div>
       )}
 
-      {gitStatus.diff && (
+      {parsedDiffLines.length > 0 && (
         <div className="omp-wb-preview-card" style={{ marginTop: 6 }}>
           <div className="omp-wb-preview-head">
-            <span className="omp-wb-preview-title">{selectedFile || '工作区 Diff'}</span>
+            <span className="omp-wb-preview-title">
+              {selectedFile ? `Diff · ${selectedFile}` : '工作区 Unified Diff'}
+            </span>
+            {selectedFile && (
+              <button type="button" className="omp-wb-pill-btn" onClick={() => setSelectedFile('')}>
+                全部变更
+              </button>
+            )}
           </div>
-          <pre className="omp-wb-code-preview">{gitStatus.diff}</pre>
+          <div className="omp-wb-code-preview omp-wb-diff-view">
+            {parsedDiffLines.map((line, i) => {
+              let cls = 'omp-diff-line';
+              if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff --git')) {
+                cls += ' is-header';
+              } else if (line.startsWith('@@')) {
+                cls += ' is-hunk';
+              } else if (line.startsWith('+')) {
+                cls += ' is-add';
+              } else if (line.startsWith('-')) {
+                cls += ' is-del';
+              }
+              return (
+                <div key={i} className={cls}>
+                  {line || ' '}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

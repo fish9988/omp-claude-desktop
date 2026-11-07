@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { marked } from 'marked';
 import type { ProcessLayoutMode, ProcessStepItem, TurnItem } from '../../types';
 import { WaitLoader } from '../wait/WaitLoader';
@@ -112,6 +112,16 @@ function renderMarkdownHtml(md: string): string {
   }
 }
 
+function formatCompactTarget(raw?: string): string {
+  if (!raw) return '';
+  const normalized = raw.replace(/\\/g, '/');
+  const parts = normalized.split('/').filter(Boolean);
+  if (parts.length > 3 && (/^[A-Za-z]:$/.test(parts[0]) || raw.startsWith('/'))) {
+    return parts.slice(-2).join('/');
+  }
+  return raw;
+}
+
 const ProcessBlock: React.FC<{
   steps: ProcessStepItem[];
   durationMs: number;
@@ -119,8 +129,18 @@ const ProcessBlock: React.FC<{
   streaming?: boolean;
   forceOpen?: boolean;
 }> = ({ steps, durationMs, layout, streaming, forceOpen = false }) => {
-  const [groupOpen, setGroupOpen] = useState(forceOpen);
+  const [groupOpen, setGroupOpen] = useState(Boolean(forceOpen || streaming));
   const [openStepIds, setOpenStepIds] = useState<Record<string, boolean>>({});
+  const prevStreamingRef = useRef(streaming);
+
+  useEffect(() => {
+    if (prevStreamingRef.current && !streaming && !forceOpen) {
+      setGroupOpen(false);
+    } else if (!prevStreamingRef.current && streaming) {
+      setGroupOpen(true);
+    }
+    prevStreamingRef.current = streaming;
+  }, [streaming, forceOpen]);
 
   if (!steps || steps.length === 0) return null;
 

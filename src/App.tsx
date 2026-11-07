@@ -16,6 +16,8 @@ import { HomeDashboard } from './features/home/HomeDashboard';
 import { ConversationView } from './features/chat/ConversationView';
 import { SettingsDialog } from './features/settings/SettingsDialog';
 import { WorkbenchDrawer, type WorkbenchTabId } from './features/workbench/WorkbenchDrawer';
+import { CommandPalette } from './features/command/CommandPalette';
+import './features/command/cmdk.css';
 
 const DEFAULT_SETTINGS: AppSettings = {
   brand: 'claude',
@@ -104,6 +106,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
+  const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
@@ -111,6 +114,9 @@ export default function App() {
   const [editingHeaderTitle, setEditingHeaderTitle] = useState(false);
   const [draftHeaderTitle, setDraftHeaderTitle] = useState('');
   const [workbenchTab, setWorkbenchTab] = useState<WorkbenchTabId | null>(null);
+  const [queuedPrompts, setQueuedPrompts] = useState<
+    Record<string, Array<{ text: string; model?: string; thinkingLevel?: string }>>
+  >({});
 
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [activeWorkspaceCwd, setActiveWorkspaceCwd] = useState<string>(
@@ -187,10 +193,24 @@ export default function App() {
     if (params.get('settings') === '1') {
       setSettingsOpen(true);
     }
+    if (params.get('cmdk') === '1') {
+      setCmdPaletteOpen(true);
+    }
     const qWb = params.get('workbench');
     if (qWb === 'files' || qWb === 'git' || qWb === 'term' || qWb === 'sched' || qWb === 'caps') {
       setWorkbenchTab(qWb);
     }
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCmdPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
   const atMatch = useMemo(() => {
@@ -660,6 +680,11 @@ export default function App() {
           },
         };
       });
+    } else if (promptData?.queued) {
+      setQueuedPrompts((prev) => ({
+        ...prev,
+        [targetSessionId!]: [...(prev[targetSessionId!] || []), { text, model: selectedModel, thinkingLevel }],
+      }));
     }
   };
 
@@ -1523,6 +1548,39 @@ export default function App() {
           </>
         )}
       </main>
+
+        {cmdPaletteOpen && (
+          <CommandPalette
+            open={cmdPaletteOpen}
+            activeWorkspaceCwd={activeWorkspaceCwd}
+            onClose={() => setCmdPaletteOpen(false)}
+            onSelectSession={(sid) => {
+              loadAndActivateSession(sid);
+              setCmdPaletteOpen(false);
+            }}
+            onNewSession={() => {
+              setActiveSessionId(null);
+              setCmdPaletteOpen(false);
+            }}
+            onOpenWorkbench={(tab) => {
+              setWorkbenchTab(tab);
+              setCmdPaletteOpen(false);
+            }}
+            onInsertText={(text) => {
+              setDraftText((prev) => `${prev ? prev.trimEnd() + ' ' : ''}${text}`);
+              setCmdPaletteOpen(false);
+            }}
+            onRunSlash={(cmd) => {
+              handleSendPrompt(cmd);
+              setCmdPaletteOpen(false);
+            }}
+            onToggleTheme={() => updateSettings({ scheme: isDark ? 'light' : 'dark' })}
+            onOpenSettings={() => {
+              setSettingsOpen(true);
+              setCmdPaletteOpen(false);
+            }}
+          />
+        )}
 
       {workbenchTab && (
         <WorkbenchDrawer

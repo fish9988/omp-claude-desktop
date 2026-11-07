@@ -2494,58 +2494,96 @@ body[data-dsh-claude-style] .dsh-claude-effort-popover {
 .omp-composer-input-box {
   position: relative;
   display: flex;
-  flex-direction: column;
-  justify-content: center;
+  align-items: flex-end;
   min-height: 40px;
   padding: 8px 38px 8px 14px;
+  background: var(--omp-card);
+  border: 1px solid var(--omp-border);
   border-radius: 14px;
-  background: var(--omp-surface-1);
-  border: 1px solid var(--omp-border-2);
-  box-shadow: 0 1px 2px rgba(20, 20, 19, 0.03);
-  transition: border-color 140ms ease, box-shadow 140ms ease;
+  transition: border 150ms ease;
 }
 
 .omp-composer-input-box:focus-within {
-  border-color: color-mix(in srgb, var(--omp-ink) 24%, transparent);
+  border-color: var(--omp-accent);
 }
 
 .omp-composer-textarea {
-  width: 100%;
-  min-height: 22px;
-  max-height: 160px;
+  flex: 1;
   border: none;
+  background: transparent;
   outline: none;
   resize: none;
-  background: transparent;
-  color: var(--omp-ink);
   font-family: var(--omp-font-ui);
   font-size: 14px;
-  line-height: 22px;
+  color: var(--omp-ink);
+  line-height: 1.5;
   padding: 0;
-  margin: 0;
-}
-
-.omp-composer-textarea::placeholder {
-  color: var(--omp-ink-4);
+  max-height: 200px;
 }
 
 .omp-composer-return-btn {
   position: absolute;
-  right: 7px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
+  right: 8px;
+  bottom: 8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
   border: none;
-  background: transparent;
-  color: var(--omp-ink);
-  opacity: 0.35;
+  background: var(--omp-surface-3);
+  color: var(--omp-ink-3);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: opacity 120ms ease, background 120ms ease;
+  transition: all 150ms ease;
+}
+
+.omp-composer-return-btn.is-ready {
+  background: var(--omp-accent);
+  color: #fff;
+}
+
+.omp-composer-return-btn.is-stop {
+  background: var(--omp-surface-3);
+  color: var(--omp-ink);
+}
+
+.omp-stop-ring {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--omp-ink);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.omp-stop-square {
+  width: 6px;
+  height: 6px;
+  background: var(--omp-ink);
+  border-radius: 1px;
+}
+
+.omp-composer-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+  height: 28px;
+  padding: 0 4px;
+}
+
+.omp-composer-left-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.omp-composer-right-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .omp-composer-return-btn.is-ready,

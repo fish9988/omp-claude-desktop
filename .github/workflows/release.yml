@@ -1,0 +1,21 @@
+name: Release
+on:
+  push:
+    tags:
+      - 'v*'
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+      - run: bun run build
+      - name: Package
+        run: |
+          mkdir release
+          # 简单的打包逻辑 (实际需结合 electron-builder)
+          copy dist\* release\
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release\*
