@@ -1,0 +1,15 @@
+{
+  "appId": "com.omp.claude-desktop",
+  "productName": "OMP Claude Desktop",
+  "directories": {
+    "output": "release"
+  },
+  "files": [
+    "dist/**/*",
+    "electron/**/*",
+    "package.json"
+  ],
+  "win": {
+    "target": "nsis"
+  }
+}
