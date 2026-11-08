@@ -979,7 +979,7 @@ export default function App() {
               <div className="dsh-claude-segments omp-perm-segments" role="group" aria-label="权限模式">
                 {(['read', 'edit', 'yolo'] as PermissionMode[]).map((mode) => {
                   const active = permissionMode === mode;
-                  const label = mode === 'read' ? 'Read' : mode === 'edit' ? 'Edit' : 'Yolo';
+                  const label = mode === 'read' ? 'OMP Read' : mode === 'edit' ? 'OMP Edit' : 'OMP Yolo';
                   return (
                     <button
                       key={mode}
@@ -1007,10 +1007,10 @@ export default function App() {
               >
                 <span>
                   {permissionMode === 'edit'
-                    ? 'Accept edits'
+                    ? 'OMP Edit'
                     : permissionMode === 'yolo'
-                      ? 'Yolo'
-                      : 'Read only'}
+                      ? 'OMP Yolo'
+                      : 'OMP Read'}
                 </span>
                 <svg viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="1.5">
                   <path d="M3 4.5L6 7.5 9 4.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -1414,7 +1414,7 @@ export default function App() {
                     {activeView.title}
                   </button>
                 )}
-                <span className="omp-header-mode-tag">标准模式</span>
+                {/* 去掉了标准模式标签 */}
               </div>
             )}
           </div>
